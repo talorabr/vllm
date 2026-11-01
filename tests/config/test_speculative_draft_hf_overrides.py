@@ -12,10 +12,11 @@ when the target itself is shrunk — which is what kept spec-decode archs like
 """
 
 import functools
+from copy import deepcopy
 from unittest.mock import MagicMock, patch
 
 import pytest
-from transformers import AutoConfig, Glm5NextConfig, PreTrainedConfig
+from transformers import AutoConfig, DeepseekV4Config, Glm5NextConfig, PreTrainedConfig
 
 from vllm.config.model import ModelConfig
 from vllm.config.parallel import ParallelConfig
@@ -30,6 +31,112 @@ def _make_hf_config(**kwargs) -> PreTrainedConfig:
     )
     defaults.update(kwargs)
     return PreTrainedConfig(**defaults)
+
+
+@pytest.mark.cpu_test
+@pytest.mark.parametrize("window", [64, 2048, 4096, 8192])
+def test_deepseek_v4_nested_mtp_window_overrides_only_draft(window):
+    target = DeepseekV4Config(
+        architectures=["DeepseekV4ForCausalLM"],
+        sliding_window=128,
+        mtp_config={"sliding_window": window},
+    )
+    draft = SpeculativeConfig.hf_config_override(deepcopy(target))
+    assert draft.sliding_window == window
+    assert draft.architectures == ["DeepSeekV4MTPModel"]
+    assert target.sliding_window == 128
+    assert target.model_type == "deepseek_v4"
+
+
+@pytest.mark.cpu_test
+@pytest.mark.parametrize("model_type", ["deepseek_v4", "deepseek_v41"])
+def test_mtp_config_generic_fields_apply_before_derived_fields(model_type):
+    target = _make_hf_config(
+        model_type=model_type,
+        num_nextn_predict_layers=1,
+        sliding_window=128,
+        mtp_config={
+            "sliding_window": 8192,
+            "num_nextn_predict_layers": 2,
+            "attention_dropout": 0.1,
+            "custom_options": {"enabled": True},
+        },
+    )
+    before = deepcopy(target.to_dict())
+    draft = SpeculativeConfig.compose_draft_hf_overrides(None)(deepcopy(target))
+    assert draft.sliding_window == 8192
+    assert draft.n_predict == draft.num_nextn_predict_layers == 2
+    assert draft.attention_dropout == 0.1
+    assert draft.architectures == (
+        ["LlamaForCausalLM"] if model_type == "deepseek_v41" else ["DeepSeekV4MTPModel"]
+    )
+    draft.custom_options["enabled"] = False
+    assert draft.mtp_config["custom_options"]["enabled"] is True
+    assert target.to_dict() == before
+
+
+@pytest.mark.cpu_test
+@pytest.mark.parametrize("value", [[], "8192", False, 8192])
+def test_mtp_config_requires_object(value):
+    with pytest.raises(ValueError, match="mtp_config must be an object"):
+        SpeculativeConfig.hf_config_override(
+            _make_hf_config(model_type="deepseek_v4", mtp_config=value)
+        )
+
+
+@pytest.mark.cpu_test
+@pytest.mark.parametrize("value", [None, {}])
+def test_empty_mtp_config_preserves_draft_defaults(value):
+    draft = SpeculativeConfig.hf_config_override(
+        _make_hf_config(model_type="deepseek_v4", sliding_window=128, mtp_config=value)
+    )
+    assert draft.sliding_window == 128
+    assert draft.architectures == ["DeepSeekV4MTPModel"]
+
+
+@pytest.mark.cpu_test
+def test_mtp_config_preserves_inkling_text_config_conversion():
+    settings = {"num_nextn_predict_layers": 2, "local_layer_ids": [0, 1]}
+    text = _make_hf_config(model_type="inkling_model", sliding_window=128)
+    outer = _make_hf_config(model_type="inkling_mm_model", text_config=text)
+    outer.mtp_config = {
+        **settings,
+        "sliding_window": 8192,
+    }
+    before = deepcopy(outer.to_dict())
+    draft = SpeculativeConfig.hf_config_override(deepcopy(outer))
+    assert draft.model_type == "inkling_mtp"
+    assert draft.n_predict == 2
+    assert draft.local_layer_ids == [0, 1]
+    assert draft.sliding_window == 128
+    assert outer.to_dict() == before
+
+
+@pytest.mark.cpu_test
+@pytest.mark.parametrize("model_type", ["deepseek_v3", "qwen3_next"])
+def test_mtp_config_does_not_change_other_model_families(model_type):
+    draft = SpeculativeConfig.hf_config_override(
+        _make_hf_config(
+            model_type=model_type,
+            sliding_window=128,
+            mtp_config={"sliding_window": 8192},
+        )
+    )
+    assert draft.sliding_window == 128
+
+
+@pytest.mark.cpu_test
+def test_mtp_config_does_not_change_transformers_backend_override():
+    config = _make_hf_config(
+        model_type="deepseek_v4",
+        sliding_window=128,
+        mtp_config={"sliding_window": 8192},
+    )
+    draft = SpeculativeConfig.hf_config_override(
+        config, {"architectures": ["TransformersForMTP"], "n_predict": 1}
+    )
+    assert draft.sliding_window == 128
+    assert draft.architectures == ["TransformersForMTP"]
 
 
 @pytest.mark.cpu_test

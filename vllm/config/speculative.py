@@ -831,6 +831,10 @@ class SpeculativeConfig:
             # DSpark path rewrites ``architectures`` itself;
             # ``method="mtp"`` on V4.1 is rejected below.
             is_v41 = hf_config.model_type == "deepseek_v41"
+            mtp_config = getattr(hf_config, "mtp_config", {})
+            if not isinstance(mtp_config, dict):
+                raise ValueError("mtp_config must be an object")
+            hf_config.update(copy.deepcopy(mtp_config))
             hf_config.model_type = "deepseek_mtp"
             n_predict = getattr(hf_config, "num_nextn_predict_layers", None)
             overrides = {"n_predict": n_predict}

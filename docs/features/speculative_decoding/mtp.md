@@ -35,6 +35,51 @@ for a Gemma 4 assistant checkpoint, that release is treating the assistant as a
 generic draft model and may fail during initialization for multimodal Gemma 4
 targets. Upgrade to a version with Gemma 4 MTP support instead.
 
+## DeepSeek V4 Checkpoint MTP Configuration
+
+An optional `mtp_config` object in the checkpoint's Hugging Face `config.json`
+provides overrides for the draft HF configuration in the `deepseek_v4` /
+`deepseek_v41` conversion branch. These fields are copied before deriving the
+draft's layer count and architecture. The target configuration is not modified,
+and other model families retain their existing configuration handling.
+
+Fields replace the corresponding draft fields; nested values are copied, not
+recursively merged. Model-specific architecture conversion and explicit runtime
+overrides still take precedence over these checkpoint defaults. The separate
+Transformers modeling-backend conversion path is unchanged.
+
+`mtp_config` must be a JSON object. There is no field allowlist in this merge:
+the model remains responsible for interpreting and
+validating its settings. An arbitrary field is not necessarily supported just
+because it can be loaded. Overrides must also be compatible with the checkpoint
+weights and the model implementation.
+
+This does not enable classic MTP on DeepSeek V4.1, which uses DSpark.
+
+### DeepSeek V4 MTP-only Sliding Window
+
+On the NVIDIA DeepSeek V4 MTP path, set `mtp_config.sliding_window` in the
+checkpoint's Hugging Face `config.json` to override the MTP window independently
+of the target:
+
+```json
+{
+  "sliding_window": 128,
+  "mtp_config": {
+    "sliding_window": 8192
+  }
+}
+```
+
+This example keeps the target window at 128 and uses 8192 for MTP attention,
+KV-cache retention, and attention metadata. When using a separate MTP checkpoint,
+put `mtp_config` in that checkpoint's config. Without an override, the existing
+window behavior is unchanged. Use this setting with `"method": "mtp"`; it is not
+a DSpark configuration option.
+
+DeepSeek V4's MTP sliding window must be a positive integer. Changing the window
+at inference does not retrain the MTP weights and may change acceptance rates.
+
 ## Offline Example
 
 ```python

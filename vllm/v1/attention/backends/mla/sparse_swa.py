@@ -477,7 +477,11 @@ class DeepseekSparseSWAMetadataBuilder(AttentionMetadataBuilder):
 
         hf_config = self.vllm_config.model_config.hf_config
         assert hasattr(hf_config, "sliding_window")
-        self.window_size = hf_config.sliding_window
+        # Metadata must match this group's KV retention, not the target config.
+        group_window = getattr(mla_spec, "sliding_window", None)
+        self.window_size = (
+            group_window if group_window is not None else hf_config.sliding_window
+        )
 
         # V4 vision variant: image spans (up to vision_max_n_token tokens) are
         # visible bidirectionally, so prefill index rows widen from

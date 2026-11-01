@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 
 import vllm.envs as envs
-from vllm.config import VllmConfig
+from vllm.config import VllmConfig, replace
 from vllm.config.kernel import NATIVE_MEGA_MOE_BACKENDS
 from vllm.forward_context import get_forward_context, is_forward_context_available
 from vllm.logger import init_logger
@@ -136,8 +136,18 @@ class DeepSeekV4MultiTokenPredictorLayer(nn.Module):
         self.shared_head = SharedHead(
             config=config, prefix=prefix, quant_config=quant_config
         )
-        self.mtp_block = DeepseekV4DecoderLayer(
+        mtp_window = config.sliding_window
+        if type(mtp_window) is not int or mtp_window <= 0:
+            raise ValueError(
+                "DeepSeek V4 MTP sliding_window must be a positive integer"
+            )
+        # The decoder reads model_config; leave the target wrapper unchanged.
+        mtp_vllm_config = replace(
             vllm_config,
+            model_config=vllm_config.speculative_config.draft_model_config,
+        )
+        self.mtp_block = DeepseekV4DecoderLayer(
+            mtp_vllm_config,
             prefix,
             topk_indices_buffer=topk_indices_buffer,
             aux_stream_list=aux_stream_list,
